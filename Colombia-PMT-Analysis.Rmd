@@ -1,0 +1,513 @@
+---
+title: "Analysis Documentation: The Accuracy Of Proxy Means Tests For Immigrant Populations"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(ggplot2)
+library(knitr)
+library(pander)
+```
+
+```{r, include=FALSE}
+knitr::knit_hooks$set(output = function(x, options){
+  if(!is.null(options$max_height)){
+    paste('<pre style = "max-height:', options$max_height, '; float: left; width: 910px; overflow-y: auto;">', x, "</pre>", sep = "")
+  }else{
+    x
+  }
+})
+```
+
+```{r set-options, include=FALSE}
+options(width=160)
+```
+
+This document contains the analysis and documentation for my paper "The Accuracy Of Proxy Means Tests For Immigrant Populations: A Case Study In Colombia," recently published in [Princeton University's Journal of Public and International Affairs](https://jpia.princeton.edu/news/accuracy-proxy-means-tests-immigrant-populations-case-study-colombia). 
+
+************************************************************
+************************************************************
+
+## Data Preparation
+
+### Data Sourcing
+The data for this analysis is compiled from three datasets, all sourced from the _Departamento Administrativo Nacional de Estadística_ (DANE), the Colombian national statistics office:
+
+* GEIH Viviendas y Hogares: individual data on household assets (2018 data available [here](http://microdatos.dane.gov.co/index.php/catalog/547/get_microdata)) 
+
+* Medición de Pobreza Monetaria y Desigualidad: household data on income and individual data on education (2018 data available [here](http://microdatos.dane.gov.co/index.php/catalog/608/get_microdata))
+
+* GEIH Módulo de Migración: individual data on birthplace and place of residence 5 years and 1 year ago (2018 data available [here](http://microdatos.dane.gov.co/index.php/catalog/640/get_microdata))
+
+For the sake of consistency and replicability, the variables were not renamed. The challenge of translating Spanish documentation to results for a paper in English was not compounded by attempting to deviate from the alphanumeric DANE variable codes. The DANE documentation for each of these datasets is also available at the links above. 
+
+
+### Data Cleaning
+
+```{r}
+load("PMT_2018.Rdata")
+```
+
+A unique identifier `UNIQUEID.HH` was created for each household head by concatenating the `Directorio` and `Secuencia_P` variables. 
+Since _Viviendas y Hogares_ and the _Módulo de Migración_ were collected at the individual level, and _Medición de Pobreza Monetaria_ was at the household level, the analysis aggregated to the household level based on the individual data from self-identified household heads. This repository includes the compiled version of these three datasets for 2018, as `PMT_2018.Rdata`.
+
+### Variable Recoding
+
+DANE surveys code dichotomous responses 1 for 'Yes' and 2 for 'No.' This can make them more difficult to interpret in a regression, so I recoded them to a 0-1 scale. The variable for health insurance status (`P6090`), also required an option for "Not sure," but the others were all true dichotomous variables. 
+
+```{r}
+PMT_2018$P5030 <- ifelse(PMT_2018$P5030 == 2, 0, PMT_2018$P5030)
+PMT_2018$P4040 <- ifelse(PMT_2018$P4040 == 2, 0, PMT_2018$P4040)
+PMT_2018$P4030S1 <- ifelse(PMT_2018$P4030S1 == 2, 0, PMT_2018$P4030S1)
+PMT_2018$P5210S1 <- ifelse(PMT_2018$P5210S1 == 2, 0, PMT_2018$P5210S1)
+PMT_2018$P5210S5 <- ifelse(PMT_2018$P5210S5 == 2, 0, PMT_2018$P5210S5)
+PMT_2018$P5210S4 <- ifelse(PMT_2018$P5210S4 == 2, 0, PMT_2018$P5210S4)
+PMT_2018$P5210S11 <- ifelse(PMT_2018$P5210S11 == 2, 0, PMT_2018$P5210S11)
+PMT_2018$P5210S2 <- ifelse(PMT_2018$P5210S2 == 2, 0, PMT_2018$P5210S2)
+PMT_2018$P5210S10 <- ifelse(PMT_2018$P5210S10 == 2, 0, PMT_2018$P5210S10)
+PMT_2018$P5210S9 <- ifelse(PMT_2018$P5210S9 == 2, 0, PMT_2018$P5210S9)
+PMT_2018$P5210S18 <- ifelse(PMT_2018$P5210S18 == 2, 0, PMT_2018$P5210S18)
+PMT_2018$P5210S16 <- ifelse(PMT_2018$P5210S16 == 2, 0, PMT_2018$P5210S16)
+PMT_2018$P5210S15 <- ifelse(PMT_2018$P5210S15 == 2, 0, PMT_2018$P5210S15)
+PMT_2018$P5210S21 <- ifelse(PMT_2018$P5210S21 == 2, 0, PMT_2018$P5210S21)
+PMT_2018$P5210S22 <- ifelse(PMT_2018$P5210S22 == 2, 0, PMT_2018$P5210S22)
+PMT_2018$P5210S3 <- ifelse(PMT_2018$P5210S3 == 2, 0, PMT_2018$P5210S3)
+# Health Insurance Status
+PMT_2018$P6090 <- ifelse(PMT_2018$P6090 == 2, 0, PMT_2018$P6090)
+PMT_2018$P6090 <- ifelse(PMT_2018$P6090 == 9, NA, PMT_2018$P6090)
+```
+
+### Migration Variable Creation
+Using dplyr, a `Nationality` variable was created based on self-reported birthplace (`P756`). Colombia doesn't have birthright citizenship, but due to limitations in the data birthplace was used as a proxy for national identity. 
+
+```{r}
+PMT_2018$Nationality <- case_when(
+  ((PMT_2018$P6074==1 | PMT_2018$P756!=3)) ~ "Colombian",  
+  (PMT_2018$P756S3==3) ~ "Venezuelan", 
+  (PMT_2018$P756S3!=3 & PMT_2018$P756==3) ~ "Other",
+  TRUE ~ "Undefined"
+)
+```
+
+This the nationality variable was then combined with information about where the respondent was located 5 years ago and 1 year ago (`P755`, and `P753`, respectively) in ordert to create the `Migration_Status` variable. 
+
+```{r}
+PMT_2018$Migration_Status <- case_when(
+  (PMT_2018$Nationality=="Venezuelan" & PMT_2018$P755S3==3 & PMT_2018$P753S3==3) ~ "Venezuelan Recent Migrant",
+  (PMT_2018$Nationality=="Venezuelan" & PMT_2018$P755S3==3 & PMT_2018$P753!=4) ~ "Venezuelan Established Migrant",
+  (PMT_2018$Nationality=="Venezuelan" & (PMT_2018$P755!=4 | PMT_2018$P753!=4)) ~ "Venezuelan Resident",
+  (PMT_2018$Nationality=="Other" & (PMT_2018$P755S3!=3 | PMT_2018$P753S3!=3)) ~ "Other Migrant",
+  (PMT_2018$Nationality=="Other" & (PMT_2018$P755!=4 | PMT_2018$P753!=4)) ~ "Other Resident",
+  (PMT_2018$Nationality=="Colombian" & (PMT_2018$P755S3==3 | PMT_2018$P753S3==3)) ~ "Colombian Venezuelan Returnee",
+  (PMT_2018$Nationality=="Colombian" & (PMT_2018$P755S3!=3 | PMT_2018$P753S3!=3)) ~ "Colombian Other Returnee",
+  (PMT_2018$Nationality=="Colombian") ~ "Colombian", 
+  TRUE ~ "Undefined"
+)
+```
+
+### Identifying Complete cases
+
+The last step in the data cleaning is identifying the cases that are complete for all the variables in the PMT model. This will prevent us from generating prediction errors when using the model to predict income.  This should happen prior to the data partition. 
+
+```{r}
+# Predicting the LM to identify complete cases
+PMT_2018_setup <- lm(INGTOTUGARR ~ factor(DPTO) + factor(P5090) + factor(P5080) + factor(P5070) + 
+                       factor(P5020) + factor(P5050) + factor(P4010) + factor(P4020) + factor(P6210) +
+                       P5000 + P5010 + P5030 + P4040 + P4030S1 + P5210S1 + P5210S5 + P5210S4 + P5210S11 + 
+                       P5210S2 + P5210S10 + P5210S9 + P5210S18 + P5210S16 + P5210S15 + P5210S21 + P5210S22 + 
+                       P6008 + P5210S3 + P6090, 
+                     weights = FEX_C,
+                     data = PMT_2018)
+PMT_2018$Complete_Case <- 1
+PMT_2018$Complete_Case[na.action(PMT_2018_setup)] <- 0
+```
+
+************************************************************
+************************************************************
+
+## Data Partition
+
+In order to mirror the process of developing and implementing a PMT, I partitioned the data into a training set that was used to create the PMT model estimates, and a testing dataset to evaluate the model's accuracy. With `r nrow(PMT_2018)` total cases, 25% was deemed to be a sufficient partition size for the training dataset, while also leaving ample data for testing.
+
+```{r}
+set.seed(768)
+PMT_2018_Partition <- sample(seq_len(nrow(PMT_2018)), size = nrow(PMT_2018)*.25)
+PMT_2018_Training <- PMT_2018[PMT_2018_Partition, ]
+PMT_2018_Test <- PMT_2018[-PMT_2018_Partition, ]
+
+```
+
+************************************************************
+************************************************************
+
+## PMT Model Development
+
+This section describes the generation of the core PMT model 
+
+### Dependent Variable Transformation
+
+Before generating the linear model, the dependent variable needed to be transformed. The original annual income variable (INGTOTUGARR) was changed to be in thousands for ease of interpretation (1 COP is approximately 4 thousand USD). 
+
+```{r, message=FALSE}
+ PMT_2018_Training$INGTOTUGARR_TH <- PMT_2018_Training$INGTOTUGARR/1000
+ggplot(data = PMT_2018_Training, aes((INGTOTUGARR_TH))) + geom_histogram()
+```
+
+The graph appears highly skewed, so I used the natural log of the income variable in order to better approximate a normal distribution and improve model fit. 
+
+```{r, message=FALSE}
+ggplot(data = PMT_2018_Training, aes(log1p(INGTOTUGARR_TH))) + geom_histogram()
+```
+There are some outliers with zero income, which were adressed in a later robustness test. For now, I created the variable `logINGTOTUGARR_TH` for the logged value of income in thousands, which was used to estimate the PMT model.
+```{r}
+ PMT_2018_Training$logINGTOTUGARR_TH <- log1p(PMT_2018_Training$INGTOTUGARR_TH)
+```
+
+
+### Estimating the Model
+
+The model was estimated using a series of variables based on Colombia's SISBEN PMT for subsidized health insurance. The current SISBEN variable list is proprietary to avoid manipulation, but past iterations have covered the following series of variables:
+
+* Factor variables included Department (`DPTO`), home ownership status (`P5090`), primary cooking fuel (`P5080`), room where food is prepared (`P5070`), type of sewage system (`P5020`), water source (`P5050`), exterior wall material (`P4010`), and floor material (`P4020`). 
+* Integer housing variables included number of rooms (`P5000`) and number of bedrooms (`P5010`). 
+* Binary Household asset variables included a private bathroom (`P5030`) 24-hour running water (`P4040`), electricity (`P4030S1`), phone line (`P5210S1`), refrigerator (`P5210S5`), washing machine (`P5210S4`), color television (`P5210S11`), cable (`P5210S2`), water heater (`P5210S10`), microwave (`P5210S9`), air conditioning (`P5210S18`), computer (`P5210S16`), stereo system (`P5210S15`), motorcycle (`P5210S21`), car (`P5210S22`), and internet (`P5210S3`). 
+* Household head characteristics included education level (`P6210`), health insurance status (`P6090`), and household size (`P6008`).
+* `FEX_C` was used as a weighting variable. 
+
+
+```{r}
+PMT_2018_Model1 <- lm(logINGTOTUGARR_TH ~ factor(DPTO) + factor(P5090) + factor(P5080) + factor(P5070) + 
+                   factor(P5020) + factor(P5050) + factor(P4010) + factor(P4020) + factor(P6210) +
+                   P5000 + P5010 + P5030 + P4040 + P4030S1 + P5210S1 + P5210S5 + P5210S4 + P5210S11 + 
+                   P5210S2 + P5210S10 + P5210S9 + P5210S18 + P5210S16 + P5210S15 + P5210S21 + P5210S22 + 
+                   P6008 + P5210S3 + P6090, 
+                weights = FEX_C,
+                data = PMT_2018_Training)
+```
+
+This model generated the following regression output:
+
+```{r, echo=FALSE, max_height = "400px"}
+summary(PMT_2018_Model1)
+```
+
+The adjusted R^2^ value of `r summary(PMT_2018_Model1)$adj.r.squared` is within the range of adjusted R^2^ values in the PMT literature, and the overall fit appears to be good enough to justify use of this model for error analysis.
+
+### Analyzing Model Accuracy
+
+In order to test the accuracy of the model, I calculated rates of both Inclusion and Exclusion Errors amongst different migration statuses. 
+
+First, I used the linear model based on the training dataset to predict income (`INGTOT_PRED_1`) for all complete cases in the testing dataset.
+
+```{r}
+PMT_2018_Test$logINGTOTUGARRTH_PRED_1 <- NA
+PMT_2018_Test$logINGTOTUGARRTH_PRED_1[PMT_2018_Test$Complete_Case == 1] <- predict.lm(PMT_2018_Model1, PMT_2018_Test, na.action = na.exclude)
+PMT_2018_Test$INGTOT_PRED_1 <- expm1(PMT_2018_Test$logINGTOTUGARRTH_PRED_1)*1000
+```
+
+I then calculated whether these predicted incomes were above or below the poverty line (`LP`, or "Linea Pobreza") as demarcated in the GEIH data.
+
+```{r}
+PMT_2018_Test$POBRE_PREDICTED_1 <- case_when(PMT_2018_Test$INGTOT_PRED_1>PMT_2018_Test$LP ~ 0,
+                                           TRUE ~ 1)
+```
+
+Finally, I compared whether the predicted categorization of poverty aligned with the actual poverty categorization variable (`POBRE`) in the Medición de Pobreza data. If the household was predicted to be above the poverty line, but in reality they were below it, they were classified as an 'Exclusion Error.' 'Inclusion Error' was the converse. Otherwise they were classifed as 'Correct.'
+
+```{r}
+PMT_2018_Test$Errors_1 <- case_when(PMT_2018_Test$POBRE==0 & PMT_2018_Test$POBRE_PREDICTED_1==1  ~ "Inclusion Error",
+                                  PMT_2018_Test$POBRE==1 & PMT_2018_Test$POBRE_PREDICTED_1==0  ~ "Exclusion Error",
+                                           TRUE ~ "Correct")
+```
+
+We can then compile these results by immigration status as a proportion:
+
+```{r}
+Error_Table <- table(PMT_2018_Test$Migration_Status, PMT_2018_Test$Errors_1)
+kable(prop.table(Error_Table, margin = 1))
+```
+
+We can then test for statistical significance for differences in error rates, focusing on exclusion errors for the statuses of interest:
+
+* Venezuelan Resident:
+```{r}
+pander((prop.test(c(Error_Table["Colombian", "Exclusion Error"], Error_Table["Venezuelan Resident", "Exclusion Error"]), c( sum(Error_Table["Colombian", ]), sum(Error_Table["Venezuelan Resident", ])))))
+```
+
+* Venezuelan Established Migrant
+```{r}
+pander(prop.test(c(Error_Table["Colombian", "Exclusion Error"], Error_Table["Venezuelan Established Migrant", "Exclusion Error"]), c( sum(Error_Table["Colombian", ]), sum(Error_Table["Venezuelan Established Migrant", ]))))
+```
+
+* Venezuelan Recent Migrant
+```{r}
+pander(prop.test(c(Error_Table["Colombian", "Exclusion Error"], Error_Table["Venezuelan Recent Migrant", "Exclusion Error"]), c( sum(Error_Table["Colombian", ]), sum(Error_Table["Venezuelan Recent Migrant", ]))))
+```
+
+This clearly demonstrates higher levels of Exclusion Error amongst Venezuelan immigrants. For the paper, the above code was modified to also test differences in Correct and Inclusion Error classifications.
+
+************************************************************
+************************************************************
+
+## Robustness Checks
+
+In order to validate the results, I performed a number of robustness checks for various subsets of the data.
+
+#### Near-Povery Error Rates
+
+First, we restricted analysis to only cases with actual income within 200% of the poverty line, as Venezuelan immigrants are more likely to be near the poverty line in the first place. 
+
+```{r}
+PMT_2018_Test$Near_LP <- case_when(PMT_2018_Test$INGTOTUGARR<(PMT_2018_Test$LP*3) & PMT_2018_Test$INGTOTUGARR>(PMT_2018_Test$LP*0)  ~ 1,
+                                 TRUE ~ 0)
+PMT_2018_Test_NearLP <- PMT_2018_Test[PMT_2018_Test$Near_LP==1, ]
+```
+
+To contextualize this sub-group, I looked at their share of the total population and their mean incomes in thousands (Table 6 in the paper): 
+
+**Near-poverty share of population, by immigration status**
+```{r}
+NP_Subpop_Share <- table(PMT_2018_Test_NearLP$Migration_Status)/table(PMT_2018_Test$Migration_Status)
+```
+
+```{r, echo=FALSE}
+kable(NP_Subpop_Share[c(1, 7:9)])
+```
+
+**Mean income in thousands, by immigration status:**
+```{r}
+PMT_2018_Test_NearLP$INGTOTUGARR_TH <- PMT_2018_Test_NearLP$INGTOTUGARR/1000
+NearLP_Income_Table <- aggregate(PMT_2018_Test_NearLP$INGTOTUGARR_TH, list(PMT_2018_Test_NearLP$Migration_Status), mean)
+```
+
+```{r, echo=FALSE}
+kable(NearLP_Income_Table[c(1, 7:9), ])
+```
+
+**Statistical significance of differences in mean income, versus Colombians:**
+
+ * Venezuelan Resident
+```{r}
+pander(t.test(PMT_2018_Test_NearLP$INGTOTUGARR_TH[PMT_2018_Test_NearLP$Migration_Status=="Colombian"], 
+       PMT_2018_Test_NearLP$INGTOTUGARR_TH[PMT_2018_Test_NearLP$Migration_Status=="Venezuelan Resident"], 
+       alternative = "two.sided", var.equal = FALSE))
+```
+ * Venezuelan Established Migrant
+```{r}
+pander(t.test(PMT_2018_Test_NearLP$INGTOTUGARR_TH[PMT_2018_Test_NearLP$Migration_Status=="Colombian"], 
+       PMT_2018_Test_NearLP$INGTOTUGARR_TH[PMT_2018_Test_NearLP$Migration_Status=="Venezuelan Established Migrant"], alternative = "two.sided", var.equal = FALSE))
+```
+ * Venezuelan Recent Migrant
+```{r}
+pander(t.test(PMT_2018_Test_NearLP$INGTOTUGARR_TH[PMT_2018_Test_NearLP$Migration_Status=="Colombian"], 
+       PMT_2018_Test_NearLP$INGTOTUGARR_TH[PMT_2018_Test_NearLP$Migration_Status=="Venezuelan Recent Migrant"], alternative = "two.sided", var.equal = FALSE))
+```
+
+************************************************************
+
+Finally, I compared exclusion error rates within this sub-population:
+
+```{r}
+Error_Table_NearLP <- table(PMT_2018_Test_NearLP$Migration_Status, PMT_2018_Test_NearLP$Errors_1)
+Error_Prop.Table_NearLP <- prop.table(Error_Table_NearLP, margin = 1)
+kable(Error_Prop.Table_NearLP[c(1, 7:9), ])
+
+```
+
+Thus we see that even within this restricted cohort, immigrant subpopulations have higher rates of exclusion errors.
+
+************************************************************
+
+#### Work-Status Error Rates
+
+The next robustness check focused on work status (`P6240`), to account for the impact of differential rates of employment between the migrant subpopulations, as shown in the table below (Table 8 in the paper).
+
+```{r}
+unemp_table <- 100*prop.table(table(PMT_2018_Test$Migration_Status, PMT_2018_Test$P6240), margin = 1)
+unemp_table <- unemp_table[c(1, 7:9), c(1:2)]
+```
+
+The table displays the percentage rate of workers (`1`) and those looking for work (`2`) by immigrant subpopulation (all other occupations such as student and retired were classified as 'Other'):
+
+```{r, echo=FALSE}
+kable(unemp_table)
+```
+
+The robustness test then checked the exclusion error rates for three different subsets of the data:
+
+**All self-reported workers**
+```{r}
+PMT_2018_Test_Workers <- PMT_2018_Test[PMT_2018_Test$P6240==1, ]
+Error_Prop.Table_Workers <- prop.table(table(PMT_2018_Test_Workers$Migration_Status, PMT_2018_Test_Workers$Errors_1), margin = 1)
+```
+
+```{r, echo=FALSE}
+kable(Error_Prop.Table_Workers[c(1, 7:9), ])
+```
+
+**Workers near the poverty line**
+```{r}
+PMT_2018_Test_NearLP_Workers <- PMT_2018_Test[PMT_2018_Test$Near_LP==1 & PMT_2018_Test$P6240==1, ]
+Error_Prop.Table_NPWorkers <- prop.table(table(PMT_2018_Test_NearLP_Workers$Migration_Status, PMT_2018_Test_NearLP_Workers$Errors_1), margin = 1)
+```
+
+```{r, echo=FALSE}
+kable(Error_Prop.Table_NPWorkers[c(1, 7:9), ])
+```
+
+**Households near the poverty line but with income (workers and non-workers)**
+```{r}
+PMT_2018_Test$No_Income <- case_when(PMT_2018_Test$INGTOTUGARR==0 ~ 1,
+                                   T ~ 0)
+PMT_2018_Test_NearLP_Income <- PMT_2018_Test[PMT_2018_Test$Near_LP==1 & PMT_2018_Test$No_Income==0, ]
+Error_Prop.Table_NPIncome <- prop.table(table(PMT_2018_Test_NearLP_Income$Migration_Status, PMT_2018_Test_NearLP_Income$Errors_1), margin = 1)
+```
+
+```{r, echo=FALSE}
+kable(Error_Prop.Table_NPWorkers[c(1, 7:9), ])
+```
+
+Across all these subsets, Colombians demonstrate consistently lower rates of exclusion errors. This indicates that the results are robust to different rates of employment and low-income subsets.
+
+************************************************************
+************************************************************
+## Identifying Occupational Downgrading
+
+In order to identify the impact of occupational downgrading, we need to look at the interaction of immigration status, education, and model accuracy. For this to be a possible mechanism, two things need to be true: 
+1. Venezuelans immigrants must have lower returns to education compared with Colombians. 
+2. These lower returns must translate to higher rates of exclusion errors. 
+
+First, I checked the relative education levels (`P6210`) for our immigrant populations, grouping no education (1) and primary education only (3) into one category.
+
+```{r}
+Ed_Table <- table(PMT_2018_Test$Migration_Status, PMT_2018_Test$P6210)
+Ed_Table_Pct <- prop.table(Ed_Table, margin = 1)*100
+```
+
+```{r, echo=FALSE}
+kable(Ed_Table_Pct[c(1, 7:9), c(1, 3:6)])
+```
+
+This indicates that Venezuelan immigrants generally have higher levels of education than Colombians, supporting the occupational downgrading theory.
+
+### Returns to Education
+
+To establish returns to education, I ran a simple regression of income on the interaction of years of education (`P6040` ) and immigration status, with age (`P6040`) as a control. 
+
+
+```{r}
+PMT_2018_Test$logINGTOTUGARR_TH <- log1p(PMT_2018_Test$INGTOTUGARR*1000)
+Income_Ed_Age_Reg <- lm(logINGTOTUGARR_TH ~ P6210*Migration_Status + P6040,
+                    weights = FEX_C,
+                    data = PMT_2018_Test)
+```
+
+```{r, echo=FALSE, max_height = "300px"}
+summary(Income_Ed_Age_Reg)
+```
+
+The significant negative interaction with Venezuelan immigrants also suggests that occupational downgrading is occuring. 
+
+### Exclusion Errors by Education Level
+
+Finally, I compared exclusion error rates across education levels for all immigrant subpopulations.
+
+```{r}
+# Calculating number of exclusion errors
+Error_Table_Ed <- (table(PMT_2018_Test$Migration_Status, PMT_2018_Test$P6210, PMT_2018_Test$Errors_1=="Exclusion Error"))
+Error_Table_Ed[, 7,] <- Error_Table_Ed[, 1,]+Error_Table_Ed[, 2,]+Error_Table_Ed[, 3,]
+
+# Calculating denominator
+N_Table_Ed <- (table(PMT_2018_Test$Migration_Status, PMT_2018_Test$P6210))
+N_Table_Ed[, 7] <- N_Table_Ed[, 1]+N_Table_Ed[, 2]+N_Table_Ed[, 3]
+
+# Calculating error rates as a percentage
+Error_Pct_Table <- 100*Error_Table_Ed[c(1, 7:9), c(4:7), 2]/N_Table_Ed[c(1, 7:9), c(4:7)]
+
+# Rearranging Table
+Error_Pct_Table <- Error_Pct_Table[c("Colombian","Venezuelan Resident", "Venezuelan Established Migrant", "Venezuelan Recent Migrant"),c(4,1:3)]
+
+# Renaming Columns
+colnames(Error_Pct_Table)[1] = "Primary"
+colnames(Error_Pct_Table)[2] = "Secondary"
+colnames(Error_Pct_Table)[3] = "Media"
+colnames(Error_Pct_Table)[4] = "University"
+```
+
+```{r, echo=FALSE}
+kable(Error_Pct_Table)
+```
+
+The relatively higher exclusion error rates at higher education levels indicates that occupational downgrading is likely happening, contributing to the overall bias against Venezuelan immigrants in the PMT model.
+
+************************************************************
+************************************************************
+## Modified PMT Model
+
+To assess a possible way to address this problem, I tested a PMT model that incorporates immigration status. 
+
+```{r}
+PMT_2018_IMM <- lm(logINGTOTUGARR_TH ~ factor(Migration_Status) + factor(DPTO) + factor(P5090) + factor(P5080) + factor(P5070) + factor(P5020) + factor(P5050) + factor(P4010) + factor(P4020) + factor(P6210) +
+                   P5000 + P5010 + P5030 + P4040 + P4030S1 + P5210S1 + P5210S5 + P5210S4 + P5210S11 + 
+                   P5210S2 + P5210S10 + P5210S9 + P5210S18 + P5210S16 + P5210S15 + P5210S21 + P5210S22 + 
+                   P6008 + P5210S3 + P6090, 
+                 weights = FEX_C,
+                 data = PMT_2018_Training)
+```
+
+```{r, echo=FALSE, max_height = "400px"}
+summary(PMT_2018_IMM)
+```
+
+This model has a slightly higher adjusted R^2^ value (`r summary(PMT_2018_IMM)$adj.r.squared`), but this increase in accuracy may or may not improve the exclusion error rates. In order to check, I ran the same steps as the original model analysis: 
+
+```{r}
+# Predicting income from LM
+PMT_2018_Test$logINGTOTUGARRTH_PRED_IMM <- NA
+PMT_2018_Test$logINGTOTUGARRTH_PRED_IMM[PMT_2018_Test$Complete_Case == 1] <- predict.lm(PMT_2018_IMM, PMT_2018_Test, na.action = na.exclude)
+PMT_2018_Test$logINGTOTUGARRTH_PRED_IMM <- expm1(PMT_2018_Test$logINGTOTUGARRTH_PRED_IMM)*1000
+
+# Identifying predicted poverty from predicted income
+PMT_2018_Test$POBRE_PREDICTED_IMM <- case_when(PMT_2018_Test$logINGTOTUGARRTH_PRED_IMM>PMT_2018_Test$LP ~ 0,
+                                           TRUE ~ 1)
+
+# Identifying Errors
+PMT_2018_Test$Errors_IMM <- case_when(PMT_2018_Test$POBRE==0 & PMT_2018_Test$POBRE_PREDICTED_IMM==1  ~ "Inclusion Error",
+                                  PMT_2018_Test$POBRE==1 & PMT_2018_Test$POBRE_PREDICTED_IMM==0  ~ "Exclusion Error",
+                                  TRUE ~ "Correct")
+
+# Generating table of errors by migration group
+Error_Table_IMM <- table(PMT_2018_Test$Migration_Status, PMT_2018_Test$Errors_IMM)
+```
+
+```{r, echo=FALSE}
+kable(prop.table(Error_Table_IMM[c(1, 7:9), ], margin = 1))
+```
+
+This shows that even with the inclusion of immigration status in the PMT model, there are higher rates of exclusion error for immigrant subpopulations. I further confirmed that these differences were statistically significant: 
+
+* Venezuelan Resident:
+```{r}
+pander((prop.test(c(Error_Table_IMM["Colombian", "Exclusion Error"], Error_Table_IMM["Venezuelan Resident", "Exclusion Error"]), c( sum(Error_Table_IMM["Colombian", ]), sum(Error_Table_IMM["Venezuelan Resident", ])))))
+```
+
+* Venezuelan Established Migrant
+```{r}
+pander(prop.test(c(Error_Table_IMM["Colombian", "Exclusion Error"], Error_Table_IMM["Venezuelan Established Migrant", "Exclusion Error"]), c( sum(Error_Table_IMM["Colombian", ]), sum(Error_Table_IMM["Venezuelan Established Migrant", ]))))
+```
+
+* Venezuelan Recent Migrant
+```{r}
+pander(prop.test(c(Error_Table_IMM["Colombian", "Exclusion Error"], Error_Table_IMM["Venezuelan Recent Migrant", "Exclusion Error"]), c( sum(Error_Table_IMM["Colombian", ]), sum(Error_Table_IMM["Venezuelan Recent Migrant", ]))))
+```
+
+Thus we can conclude that simply including immigration status in the model is not enough to compensate for the overall bias.  
+
+************************************************************
+************************************************************
+## Conclusion
+
+In addition to documenting the analysis for the Colombia case study, this process can hopefully be adapted for use in other evaluations of PMTs. In particular, this type of analysis should be performed prior to the implementation of PMTs, to ensure that they are not biased against particular vulnerable subpopulations. 
+
