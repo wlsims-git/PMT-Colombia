@@ -6,4 +6,4 @@ This repository contains the supporting documentation for "The Accuracy Of Proxy
 It includes the following:
 1. A RMD file documenting the project's analysis 
 2. An R data file containing the project data
-3. A LaTeX-formatted PDF version of the paper
+3. A PDF version of the paper
