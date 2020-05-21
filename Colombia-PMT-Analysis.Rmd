@@ -394,7 +394,7 @@ This indicates that Venezuelan immigrants generally have higher levels of educat
 
 ### Returns to Education
 
-To establish returns to education, I ran a simple regression of income on the interaction of years of education (`P6040` ) and immigration status, with age (`P6040`) as a control. 
+To establish returns to education, I ran a simple regression of income on the interaction of years of education (`P6210` ) and immigration status, with age (`P6040`) as a control. 
 
 
 ```{r}
